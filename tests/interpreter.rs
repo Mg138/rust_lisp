@@ -5,7 +5,7 @@ use rust_lisp::{
     model::{FloatType, IntType, RuntimeError, Symbol, Value},
     parser::parse,
 };
-use std::{cell::RefCell, rc::Rc};
+use std::{sync::Arc, sync::Mutex};
 
 #[test]
 fn eval_basic_expression() {
@@ -273,7 +273,7 @@ fn lambda_err() {
     .next()
     .unwrap()
     .unwrap();
-    let env = Rc::new(RefCell::new(default_env()));
+    let env = Arc::new(Mutex::new(default_env()));
     let result = eval(env, &ast);
 
     assert_eq!(
@@ -365,7 +365,7 @@ fn short_circuit() {
 
 #[test]
 fn native_closure() {
-    let my_state = Rc::new(RefCell::new(0));
+    let my_state = Arc::new(Mutex::new(0));
 
     let expression = lisp! {
       (begin
@@ -378,26 +378,61 @@ fn native_closure() {
     let my_state_closure = my_state.clone();
     env.define(
         Symbol::from("my_closure"),
-        Value::NativeClosure(Rc::new(RefCell::new(
+        Value::NativeClosure(Arc::new(Mutex::new(
             move |_env, _args| -> Result<Value, RuntimeError> {
-                let current = *my_state_closure.borrow();
-                my_state_closure.replace(current + 1);
+                let mut current = my_state_closure.lock().unwrap();
+                *current = *current + 1;
                 Ok(Value::NIL)
             },
         ))),
     );
-    let env = Rc::new(RefCell::new(env));
+    let env = Arc::new(Mutex::new(env));
 
     eval(env, &expression).unwrap();
 
-    assert_eq!(*my_state.borrow(), 3);
+    assert_eq!(*my_state.lock().unwrap(), 3);
 }
 
 #[cfg(test)]
 fn eval_str(source: &str) -> Value {
     let ast = parse(source).next().unwrap().unwrap();
-    let env = Rc::new(RefCell::new(default_env()));
+    let env = Arc::new(Mutex::new(default_env()));
     return eval(env, &ast).unwrap();
+}
+
+#[test]
+fn threaded_native_closure() {
+    let my_state = Arc::new(Mutex::new(0));
+
+    let mut env = default_env();
+
+    let my_state_closure = my_state.clone();
+    std::thread::spawn(move || {
+        env.define(
+            Symbol::from("my_closure"),
+            Value::NativeClosure(Arc::new(Mutex::new(
+                move |_env, _args| -> Result<Value, RuntimeError> {
+                    let mut current = my_state_closure.lock().unwrap();
+                    *current = *current + 1;
+                    Ok(Value::NIL)
+                },
+            ))),
+        );
+        let env = Arc::new(Mutex::new(env));
+
+        let expression = lisp! {
+          (begin
+            (my_closure)
+            (my_closure)
+            (my_closure))
+        };
+
+        eval(env, &expression).unwrap();
+    })
+    .join()
+    .unwrap();
+
+    assert_eq!(*my_state.lock().unwrap(), 3);
 }
 
 // #[bench]
@@ -444,7 +479,7 @@ fn eval_str(source: &str) -> Value {
 //       (mergesort (list 75 10 45 26 34 36 10 97 34 64 24 20 24 30 39 39 1 53 20 57 6 24 37 41 51 49 12 78 11 71 16 12 60 42 76 63 64 84 11 31 8 48 41 62 98 2 31 53 37 57 14 85 74 75 98 65 69 37 60 96 33 5 95 21 85 7 31 37 2 78 51 88 70 36 1 18 41 68 1 6 16 61 32 80 63 60 92 61 89 91 33 34 61 21 32 14 64 63 8 91)))";
 //   let ast = parse(source).unwrap();
 
-//   let env = Rc::new(RefCell::new(default_env()));
+//   let env = Arc::new(Mutex::new(default_env()));
 
 //   let start = SystemTime::now();
 //   // for _ in 0..10000 {

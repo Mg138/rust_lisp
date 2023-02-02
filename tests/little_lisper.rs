@@ -5,7 +5,7 @@ use rust_lisp::{
     model::{IntType, RuntimeError, Value},
     parser::parse,
 };
-use std::{cell::RefCell, rc::Rc};
+use std::{sync::Arc, sync::Mutex};
 
 #[test]
 fn one() {
@@ -64,6 +64,6 @@ fn seven() {
 #[cfg(test)]
 fn eval_str(source: &str) -> Result<Value, RuntimeError> {
     let ast = parse(source).next().unwrap().unwrap();
-    let env = Rc::new(RefCell::new(default_env()));
+    let env = Arc::new(Mutex::new(default_env()));
     return eval(env, &ast);
 }

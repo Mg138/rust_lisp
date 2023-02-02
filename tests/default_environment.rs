@@ -4,7 +4,7 @@ use rust_lisp::{
     lisp,
     model::{IntType, Value},
 };
-use std::{cell::RefCell, rc::Rc};
+use std::{sync::Arc, sync::Mutex};
 
 #[test]
 fn range() {
@@ -144,6 +144,6 @@ fn number_cast_comparisons() {
 
 #[cfg(test)]
 fn eval_ast(ast: Value) -> Value {
-    let env = Rc::new(RefCell::new(default_env()));
+    let env = Arc::new(Mutex::new(default_env()));
     return eval(env, &ast).unwrap();
 }

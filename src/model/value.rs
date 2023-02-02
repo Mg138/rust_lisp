@@ -1,8 +1,8 @@
 use cfg_if::cfg_if;
 use std::any::Any;
 use std::ops::{Add, Div, Mul, Sub};
-use std::rc::Rc;
-use std::{cell::RefCell, cmp::Ordering};
+use std::sync::Arc;
+use std::{sync::Mutex, cmp::Ordering, ptr};
 use std::{collections::HashMap, fmt::Debug};
 
 cfg_if! {
@@ -34,7 +34,7 @@ pub enum Value {
     /// A native Rust closure that can be called from lisp code (the closure
     /// can capture things from its Rust environment)
     NativeClosure(
-        Rc<RefCell<dyn FnMut(Rc<RefCell<Env>>, Vec<Value>) -> Result<Value, RuntimeError>>>,
+        Arc<Mutex<dyn FnMut(Arc<Mutex<Env>>, Vec<Value>) -> Result<Value, RuntimeError> + Send + Sync>>,
     ),
 
     /// A lisp function defined in lisp
@@ -44,20 +44,20 @@ pub enum Value {
     Macro(Lambda),
 
     /// A reference to a foreign value (struct, enum, etc)
-    Foreign(Rc<dyn Any>),
+    Foreign(Arc<dyn Any + Send + Sync>),
 
     /// A tail-call that has yet to be executed. Internal use only!
     TailCall {
-        func: Rc<Value>,
+        func: Arc<Value>,
         args: Vec<Value>,
     },
 }
 
 /// A Rust function that is to be called from lisp code
-pub type NativeFunc = fn(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError>;
+pub type NativeFunc = fn(env: Arc<Mutex<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError>;
 
 /// Alias for the contents of Value::HashMap
-pub type HashMapRc = Rc<RefCell<HashMap<Value, Value>>>;
+pub type HashMapRc = Arc<Mutex<HashMap<Value, Value>>>;
 
 impl Value {
     pub const NIL: Value = Value::List(List::NIL);
@@ -71,8 +71,13 @@ impl Value {
             Value::True => "T",
             Value::False => "F",
             Value::String(_) => "string",
-            Value::List(List::NIL) => "nil",
-            Value::List(_) => "list",
+            Value::List(list) => {
+                if *list == List::NIL {
+                    "nil"
+                } else {
+                    "list"
+                }
+            },
             Value::HashMap(_) => "hash map",
             Value::Int(_) => "integer",
             Value::Float(_) => "float",
@@ -233,7 +238,7 @@ impl<'a> TryFrom<&'a Value> for &'a HashMapRc {
 
 impl From<HashMap<Value, Value>> for Value {
     fn from(i: HashMap<Value, Value>) -> Self {
-        Value::HashMap(Rc::new(RefCell::new(i)))
+        Value::HashMap(Arc::new(Mutex::new(i)))
     }
 }
 
@@ -243,7 +248,7 @@ impl From<HashMapRc> for Value {
     }
 }
 
-impl<'a> TryFrom<&'a Value> for &'a Rc<dyn Any> {
+impl<'a> TryFrom<&'a Value> for &'a Arc<dyn Any + Send + Sync> {
     type Error = RuntimeError;
 
     fn try_from(value: &'a Value) -> Result<Self, Self::Error> {
@@ -256,8 +261,8 @@ impl<'a> TryFrom<&'a Value> for &'a Rc<dyn Any> {
     }
 }
 
-impl From<Rc<dyn Any>> for Value {
-    fn from(i: Rc<dyn Any>) -> Self {
+impl From<Arc<dyn Any + Send + Sync>> for Value {
+    fn from(i: Arc<dyn Any + Send + Sync>) -> Self {
         Value::Foreign(i)
     }
 }
@@ -274,7 +279,7 @@ impl std::fmt::Display for Value {
             Value::String(this) => write!(f, "\"{}\"", this),
             Value::List(this) => write!(f, "{}", this),
             Value::HashMap(this) => {
-                let borrowed = this.borrow();
+                let borrowed = this.lock().unwrap();
                 let entries = std::iter::once(lisp! { hash }).chain(
                     borrowed
                         .iter()
@@ -334,8 +339,8 @@ impl PartialEq for Value {
             (Value::Int(this), Value::Int(other)) => this == other,
             (Value::Float(this), Value::Float(other)) => this.to_bits() == other.to_bits(),
             (Value::Symbol(this), Value::Symbol(other)) => this == other,
-            (Value::HashMap(this), Value::HashMap(other)) => Rc::ptr_eq(this, other),
-            (Value::Foreign(this), Value::Foreign(other)) => Rc::ptr_eq(this, other),
+            (Value::HashMap(this), Value::HashMap(other)) => Arc::ptr_eq(this, other),
+            (Value::Foreign(this), Value::Foreign(other)) => Arc::ptr_eq(this, other),
             (
                 Value::TailCall {
                     func: this_func,
@@ -540,7 +545,7 @@ impl std::hash::Hash for Value {
             Value::String(x) => x.hash(state),
             Value::Symbol(x) => x.hash(state),
             Value::List(x) => x.hash(state),
-            Value::HashMap(x) => x.as_ptr().hash(state),
+            Value::HashMap(x) => ptr::hash(x, state),
             Value::NativeFunc(x) => std::ptr::hash(x, state),
             Value::NativeClosure(x) => std::ptr::hash(x, state),
             Value::Lambda(x) => x.hash(state),

@@ -5,7 +5,7 @@ use crate::{
     utils::{require_arg, require_typed_arg},
 };
 use cfg_if::cfg_if;
-use std::{cell::RefCell, collections::HashMap, convert::TryInto, rc::Rc};
+use std::{sync::Mutex, collections::HashMap, convert::TryInto, sync::Arc};
 cfg_if! {
     if #[cfg(feature = "bigint")] {
         use num_traits::ToPrimitive;
@@ -278,7 +278,7 @@ pub fn default_env() -> Env {
                 }
             }
 
-            Ok(Value::HashMap(Rc::new(RefCell::new(hash))))
+            Ok(Value::HashMap(Arc::new(Mutex::new(hash))))
         }),
     );
 
@@ -289,7 +289,8 @@ pub fn default_env() -> Env {
             let key = require_arg("hash_get", &args, 1)?;
 
             Ok(hash
-                .borrow()
+                .lock()
+                .unwrap()
                 .get(key)
                 .map(|v| v.clone())
                 .unwrap_or(Value::NIL))
@@ -303,7 +304,7 @@ pub fn default_env() -> Env {
             let key = require_arg("hash_set", &args, 1)?;
             let value = require_arg("hash_set", &args, 2)?;
 
-            hash.borrow_mut().insert(key.clone(), value.clone());
+            hash.lock().unwrap().insert(key.clone(), value.clone());
 
             Ok(Value::HashMap(hash.clone()))
         }),

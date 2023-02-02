@@ -1,20 +1,21 @@
-use std::cell::RefCell;
+use std::sync::Mutex;
 use std::fmt::Debug;
-use std::rc::Rc;
+use std::ptr;
+use std::sync::Arc;
 
 use super::{Env, Symbol, Value};
 
 /// A Lisp function defined in Lisp.
 #[derive(Debug, Clone)]
 pub struct Lambda {
-    pub closure: Rc<RefCell<Env>>,
+    pub closure: Arc<Mutex<Env>>,
     pub argnames: Vec<Symbol>,
-    pub body: Rc<Value>,
+    pub body: Arc<Value>,
 }
 
 impl PartialEq for Lambda {
     fn eq(&self, other: &Self) -> bool {
-        self.closure.as_ptr() == other.closure.as_ptr()
+        Arc::ptr_eq(&self.closure, &other.closure)
             && self.argnames == other.argnames
             && self.body == other.body
     }
@@ -22,7 +23,7 @@ impl PartialEq for Lambda {
 
 impl std::hash::Hash for Lambda {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.closure.as_ptr().hash(state);
+        ptr::hash(&self.closure, state);
         self.argnames.hash(state);
         self.body.hash(state);
     }

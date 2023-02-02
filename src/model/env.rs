@@ -1,5 +1,5 @@
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::Mutex;
+use std::sync::Arc;
 use std::{collections::HashMap, fmt::Debug};
 
 use super::{RuntimeError, Symbol, Value};
@@ -8,7 +8,7 @@ use super::{RuntimeError, Symbol, Value};
 /// closures, for `let` statements, for function arguments, etc.
 #[derive(Debug)]
 pub struct Env {
-    parent: Option<Rc<RefCell<Env>>>,
+    parent: Option<Arc<Mutex<Env>>>,
     entries: HashMap<Symbol, Value>,
 }
 
@@ -22,7 +22,7 @@ impl Env {
     }
 
     /// Create a new environment extending the given environment
-    pub fn extend(parent: Rc<RefCell<Env>>) -> Self {
+    pub fn extend(parent: Arc<Mutex<Env>>) -> Self {
         Self {
             parent: Some(parent),
             entries: HashMap::new(),
@@ -35,7 +35,7 @@ impl Env {
         if let Some(val) = self.entries.get(&key) {
             Some(val.clone()) // clone the Rc
         } else if let Some(parent) = &self.parent {
-            parent.borrow().get(key)
+            parent.lock().unwrap().get(key)
         } else {
             None
         }
@@ -53,7 +53,7 @@ impl Env {
             self.entries.insert(key, value);
             Ok(())
         } else if let Some(parent) = &self.parent {
-            parent.borrow_mut().set(key, value)
+            parent.lock().unwrap().set(key, value)
         } else {
             Err(RuntimeError {
                 msg: format!("Tried to set value of undefined symbol \"{}\"", key),
@@ -66,7 +66,7 @@ impl Env {
         if self.entries.contains_key(key) {
             self.entries.remove(key);
         } else if let Some(parent) = &self.parent {
-            parent.borrow_mut().undefine(key);
+            parent.lock().unwrap().undefine(key);
         }
     }
 
@@ -83,8 +83,8 @@ impl Env {
         if let Some(parent) = &self.parent {
             output.push_str("\n\n");
             parent
-                .as_ref()
-                .borrow()
+                .lock()
+                .unwrap()
                 .display_recursive(output, depth + 1);
         }
 

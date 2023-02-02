@@ -1,4 +1,4 @@
-use std::{any::Any, rc::Rc};
+use std::{any::Any, sync::Arc};
 
 use crate::model::{FloatType, HashMapRc, IntType, List, RuntimeError, Symbol, Value};
 
@@ -82,7 +82,7 @@ impl TypeName for &HashMapRc {
     }
 }
 
-impl TypeName for &Rc<dyn Any> {
+impl TypeName for &Arc<dyn Any> {
     fn get_name() -> &'static str {
         "foreign value"
     }

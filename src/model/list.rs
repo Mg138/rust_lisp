@@ -1,18 +1,33 @@
-use std::cell::RefCell;
+use std::sync::Mutex;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::iter::FromIterator;
-use std::rc::Rc;
+use std::ptr;
+use std::sync::Arc;
 
 use super::{RuntimeError, Value};
 
 /**
  * A Lisp list, implemented as a linked-list
  */
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, Clone)]
 pub struct List {
-    head: Option<Rc<RefCell<ConsCell>>>,
+    head: Option<Arc<Mutex<ConsCell>>>,
 }
+
+impl PartialEq for List {
+    fn eq(&self, other: &Self) -> bool {
+        self.head
+            .as_ref()
+            .zip(other.head.as_ref())
+            .map(|(a, b)| {
+                a.lock().unwrap().car == b.lock().unwrap().car
+            })
+            .unwrap_or(self.head.is_none() && other.head.is_none())
+    }
+}
+
+impl Eq for List {}
 
 impl List {
     pub const NIL: List = List { head: None };
@@ -20,7 +35,7 @@ impl List {
     pub fn car(&self) -> Result<Value, RuntimeError> {
         self.head
             .as_ref()
-            .map(|rc| rc.borrow().car.clone())
+            .map(|rc| rc.lock().unwrap().car.clone())
             .ok_or_else(|| RuntimeError {
                 msg: String::from("Attempted to apply car on nil"),
             })
@@ -31,14 +46,14 @@ impl List {
             head: self
                 .head
                 .as_ref()
-                .and_then(|rc| rc.borrow().cdr.as_ref().cloned()),
+                .and_then(|rc| rc.lock().unwrap().cdr.clone()),
         }
     }
 
     #[must_use]
     pub fn cons(&self, val: Value) -> List {
         List {
-            head: Some(Rc::new(RefCell::new(ConsCell {
+            head: Some(Arc::new(Mutex::new(ConsCell {
                 car: val,
                 cdr: self.head.clone(),
             }))),
@@ -55,23 +70,35 @@ impl<'a> List {
 /// A `ConsCell` is effectively a linked-list node, where the value in each node
 /// is a lisp `Value`. To be used as a true "list", the ConsCell must be wrapped
 /// in Value::List().
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 struct ConsCell {
     pub car: Value,
-    pub cdr: Option<Rc<RefCell<ConsCell>>>,
+    pub cdr: Option<Arc<Mutex<ConsCell>>>,
 }
 
 impl std::hash::Hash for ConsCell {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.car.hash(state);
-        self.cdr.as_ref().map(|rc| rc.as_ptr()).hash(state);
+        if let Some(cdr) = self.cdr.as_ref() {
+            ptr::hash(cdr, state)
+        } else {
+            None::<ConsCell>.hash(state)
+        }
     }
 }
+
+impl PartialEq for ConsCell {
+    fn eq(&self, other: &Self) -> bool {
+        self.car == other.car
+    }
+}
+
+impl Eq for ConsCell {}
 
 impl Display for List {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         if let Some(head) = &self.head {
-            write!(formatter, "({})", head.as_ref().borrow())
+            write!(formatter, "({})", head.lock().unwrap())
         } else {
             write!(formatter, "NIL")
         }
@@ -81,7 +108,7 @@ impl Display for List {
 impl Display for ConsCell {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self.cdr.as_ref() {
-            Some(cdr) => write!(formatter, "{} {}", self.car, cdr.borrow()),
+            Some(cdr) => write!(formatter, "{} {}", self.car, cdr.lock().unwrap()),
             None => write!(formatter, "{}", self.car),
         }
     }
@@ -89,7 +116,11 @@ impl Display for ConsCell {
 
 impl std::hash::Hash for List {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.head.as_ref().map(|rc| rc.as_ptr()).hash(state);
+        if let Some(head) = self.head.as_ref() {
+            ptr::hash(head, state)
+        } else {
+            None::<ConsCell>.hash(state)
+        }
     }
 }
 
@@ -103,16 +134,17 @@ impl<'a> IntoIterator for &'a List {
 }
 
 #[derive(Clone)]
-pub struct ConsIterator(Option<Rc<RefCell<ConsCell>>>);
+pub struct ConsIterator(Option<Arc<Mutex<ConsCell>>>);
 
 impl Iterator for ConsIterator {
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.0.clone().map(|cons| {
-            let val = cons.borrow().car.clone();
+            let cons = cons.lock().unwrap();
 
-            self.0 = cons.borrow().cdr.clone();
+            let val = cons.car.clone();
+            self.0 = cons.cdr.clone();
 
             val
         })
@@ -132,11 +164,11 @@ impl ExactSizeIterator for ConsIterator {
 impl FromIterator<Value> for List {
     fn from_iter<I: IntoIterator<Item = Value>>(iter: I) -> Self {
         let mut new_list = List { head: None };
-        let mut tail: Option<Rc<RefCell<ConsCell>>> = None;
+        let mut tail: Option<Arc<Mutex<ConsCell>>> = None;
 
         for val in iter {
             // The cons cell for the current value
-            let new_cons = Rc::new(RefCell::new(ConsCell {
+            let new_cons = Arc::new(Mutex::new(ConsCell {
                 car: val,
                 cdr: None,
             }));
@@ -146,7 +178,7 @@ impl FromIterator<Value> for List {
                 new_list.head = Some(new_cons.clone());
             // otherwise, put it in the current tail cell
             } else if let Some(tail_cons) = tail {
-                tail_cons.as_ref().borrow_mut().cdr = Some(new_cons.clone());
+                tail_cons.as_ref().lock().unwrap().cdr = Some(new_cons.clone());
             }
 
             // the current cell is the new tail
